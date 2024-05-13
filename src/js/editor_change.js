@@ -333,6 +333,11 @@ let line_with_last = function (instance) {
     return -1;
 }
 
+// From https://stackoverflow.com/questions/3115150/how-to-escape-regular-expression-special-characters-using-javascript
+function escapeRegExp(text) {
+    return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+  }
+
 /**
  * Execute the last command in the editor
  * @param {CodeMirror} instance - CodeMirror instance
@@ -343,14 +348,16 @@ let exec_last = function (instance) {
     let last_line = line_with_last(instance);
     if (last_line == -1) return;
     let beforecur = instance.getRange({line: 0, ch: 0}, {line: last_line});
-    let all = clean_content(instance.getValue());
+    let aftercur = instance.getRange({line: last_line},{line:instance.lastLine()})
     let command = clean_content(beforecur).slice(-1)[0];
-    let indice = all.indexOf(command);
-    if (indice<all.length-1) {
-        let next =  all[indice+1];
-        let sc = instance.getSearchCursor(next);
-        sc.find();
-        instance.setCursor(sc.pos.to);
+    let allAfter = clean_content(aftercur);
+    if (allAfter!=null && allAfter.length>0) {
+        let possibleNext = [...aftercur.matchAll(escapeRegExp(allAfter[0]))];
+        if (possibleNext.length>0) {
+            instance.setCursor(
+                instance.posFromIndex(possibleNext[0].index+beforecur.length+allAfter[0].length)
+            );
+        }
     }
     executecallback.execute("toplevel", command);
     autoscroll_output();
@@ -379,16 +386,24 @@ let exec_all = function (instance) {
  * @return {*} CodeMirror cursor
  */
 let calculate_highlight = function (instance) {
-    let execselected;
-    try {
-        execselected = instance.getRange({line: 0, ch: 0}, {line: line_with_last(instance)})
-            .match(CODE_SEPARATOR_REGEX).slice(-1)[0] // Get last sentence
-    } catch (e) {
-        execselected = "";
+    let command_gen = instance.getRange({line: 0, ch: 0}, {line: line_with_last(instance)}).matchAll(CODE_SEPARATOR_REGEX);
+
+    let next = command_gen.next();
+    let start;
+    let end;
+
+    while (!next.done) {
+    const val = next.value;
+    next = command_gen.next();
+        if (next.done){
+            start = instance.posFromIndex(val.index);
+            end = instance.posFromIndex(val.index+val[0].length);
+        }
     }
-    let cursor = instance.getSearchCursor(execselected)
-    cursor.find();
-    return cursor;
+    return {
+        start:start,
+        end:end
+    }
 };
 
 /**
@@ -498,9 +513,9 @@ function readSingleFile(e) {
  */
 function cursor_activity(instance, changeObj) {
     let cursor = calculate_highlight(instance);
-    if (!(cursor.from() == undefined)) {
+    if (!(cursor.start == undefined) && !(cursor.end == undefined)) {
         instance.current_marker.clear();
-        instance.current_marker = instance.markText(from = cursor.from(), to = cursor.to(), options = {
+        instance.current_marker = instance.markText(from = cursor.start, to = cursor.end, options = {
             className: "code-highlight"
         });
     }

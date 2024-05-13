@@ -173,8 +173,6 @@ module Ppx_support = struct
 end
 
 module Version = struct
-  type t = int list
-  
   let from_string v = List.map int_of_string (String.split_on_char '.' v)
   
   let rec comp v v' = match v, v' with
@@ -247,8 +245,6 @@ let by_id s = Dom_html.getElementById s
 
 let by_id_coerce s f = Js.Opt.get (f (Dom_html.getElementById s)) (fun () -> raise Not_found)
 
-let do_by_id s f = try f (Dom_html.getElementById s) with Not_found -> ()
-
 (* load file using a synchronous XMLHttpRequest *)
 let load_resource_aux filename url =
   Js_of_ocaml_lwt.XmlHttpRequest.perform_raw ~response_type:XmlHttpRequest.ArrayBuffer url
@@ -288,6 +284,7 @@ let setup_toplevel () =
   exec' "#disable \"shortvar\";;";
   exec' "#directory \"/static\";;";
   exec' "module Num = Big_int_Z;;";
+  exec' "module Graph = Graphics_js;;";
   Ppx_support.init ();
   let[@alert "-deprecated"] new_directive n k = Hashtbl.add Toploop.directive_table n k in
     new_directive
@@ -339,8 +336,11 @@ let highlight_location loc =
         let to_ = if !x = line2 then `Pos col2 else `Last in
         Colorize.highlight from_ to_ e)
 
-let append colorize output cl s =
-  Dom.appendChild output (Tyxml_js.To_dom.of_element (colorize ~a_class:cl s))
+let append colorize output cl (s:string) =
+  if String.length s > 0 then
+    Dom.appendChild output (Tyxml_js.To_dom.of_element (colorize ~a_class:cl s))
+  else 
+    Dom.appendChild output (Tyxml_js.To_dom.of_element (colorize ~a_class:cl "empty output"))
 
 let append_to_console s =
   Firebug.console##log (Js.string s)
@@ -355,7 +355,21 @@ let sanitize_command cmd =
     then cmd ^ ";"
     else cmd
 
+let default_print_out_phrase = !Toploop.print_out_phrase
+
+let print_out_phrase ppf p =
+  let output = by_id "output" in
+  match p with
+    | Outcometree.Ophr_exception(exn, _) ->
+      (append Colorize.text output "stderr") (
+        Format.sprintf "Runtime exception : \n%s" (Printexc.to_string exn);)
+    | _ -> default_print_out_phrase ppf p
+
+let () = Toploop.print_out_phrase := print_out_phrase
+
 let execute_callback mode content =
+  let output = by_id "output" in
+  current_position := output##.childNodes##.length;
   let content' = sanitize_command content in
   match mode with
     |"internal" -> JsooTop.execute true ~pp_code:binsharp_ppf ~highlight_location bincaml_ppf content'
@@ -369,7 +383,6 @@ let run _ =
   let textbox : 'a Js.t = by_id_coerce "userinput" Dom_html.CoerceTo.textarea in
   let execute () =
     let content = Js.to_string textbox##.value##trim in
-    current_position := output##.childNodes##.length;
     History.push content;
     textbox##.value := Js.string "";
     execute_callback "toplevel" content;
@@ -446,6 +459,7 @@ let run _ =
       >>= fun () ->
       textbox##focus;
       Lwt.return_unit);
+  Graphics_js.open_canvas (by_id_coerce "test-canvas" Dom_html.CoerceTo.canvas);
   Sys_js.set_channel_flusher caml_chan (append Colorize.ocaml output "caml");
   Sys_js.set_channel_flusher sharp_chan (append Colorize.ocaml output "sharp");
   Sys_js.set_channel_flusher stdout (append Colorize.text output "stdout");
